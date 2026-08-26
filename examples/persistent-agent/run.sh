@@ -7,15 +7,15 @@
 # code 2 if any required variable is unset or still contains an unfilled
 # placeholder like "<YOUR_GCS_BUCKET>" or "YOUR_TOKEN"):
 #   export RPC_URL=https://rpc.ritualfoundation.org
-#   export FOUNDRY_ACCOUNT=my-agent                     # preferred: imported Foundry keystore account
-#   export PRIVATE_KEY=0x...                           # compatibility fallback; avoid in shared shells
+#   export FOUNDRY_ACCOUNT=my-agent                      # preferred: imported Foundry keystore account
+#   export PRIVATE_KEY=0x...                             # compatibility fallback; avoid in shared shells
 
-#   export ANTHROPIC_API_KEY=sk-ant-...                # or OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
-#   export DA_PROVIDER=gcs                             # one of: hf, gcs, pinata
+#   export ANTHROPIC_API_KEY=sk-ant-...                  # or OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
+#   export DA_PROVIDER=gcs                               # one of: hf, gcs, pinata
 #   export GCS_DA_SERVICE_ACCOUNT_JSON="$(cat sa.json)"
-#   export GCS_DA_BUCKET=my-agent-workspace-bucket     # a GCS bucket YOU own
+#   export GCS_DA_BUCKET=my-agent-workspace-bucket       # a GCS bucket YOU own
 #   export GCS_DA_PREFIX=agents/demo
-#   export RELAY_URL=https://my-relay.example.com      # optional; omit to skip relay verify
+#   export RELAY_URL=https://my-relay.example.com        # optional; omit to skip relay verify
 #   export VERIFY_RELAY=1
 #   bash run.sh
 #
@@ -51,17 +51,30 @@ require_real_value() {
 }
 
 require_real_value RPC_URL "${RPC_URL:-}" "e.g. https://rpc.ritualfoundation.org"
+
 if [ -n "${FOUNDRY_ACCOUNT:-}" ]; then
     SIGNER_ARGS=(--account "$FOUNDRY_ACCOUNT")
     SENDER=$(cast wallet address --account "$FOUNDRY_ACCOUNT")
+    
+    # SECURITY FIX: Request construction (helpers.py) still requires the raw PRIVATE_KEY from the environment
+    # to sign the encrypted secrets blob. We enforce its presence here to prevent Python panics during spawn,
+    # and strictly assert that both keys derive to the exact same address to prevent signature divergence.
+    require_real_value PRIVATE_KEY "${PRIVATE_KEY:-}" "0x-prefixed private key corresponding to FOUNDRY_ACCOUNT (required for secrets payload signature)"
+    
+    PK_SENDER=$(cast wallet address "$PRIVATE_KEY")
+    if [ "$SENDER" != "$PK_SENDER" ]; then
+        echo "ERROR: Diverging credentials! FOUNDRY_ACCOUNT address ($SENDER) does not match PRIVATE_KEY address ($PK_SENDER)." >&2
+        exit 2
+    fi
 elif [ -n "${PRIVATE_KEY:-}" ]; then
     require_real_value PRIVATE_KEY "$PRIVATE_KEY" "0x-prefixed funded key"
     SIGNER_ARGS=(--private-key "$PRIVATE_KEY")
     SENDER=$(cast wallet address "$PRIVATE_KEY")
 else
-    echo "ERROR: Set FOUNDRY_ACCOUNT to an imported keystore account or PRIVATE_KEY as a compatibility fallback." >&2
+    echo "ERROR: Set FOUNDRY_ACCOUNT (and its matching PRIVATE_KEY) or just PRIVATE_KEY as a compatibility fallback." >&2
     exit 2
 fi
+
 : "${DA_PROVIDER:?Set DA_PROVIDER to one of: hf, gcs, pinata}"
 
 if ! command -v uv >/dev/null 2>&1; then
